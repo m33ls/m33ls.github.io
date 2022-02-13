@@ -1,11 +1,20 @@
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  src: url(https://raw.githubusercontent.com/m33ls/m33ls.github.io/main/DejaVuSansMono.tff) format("truetype")
+}
+
 body {
   background-color: black;
   color: white;
   font-family: monospace, monospace;
 }
+
 pre {
-  font-family:monospace, monospace;
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 16px;
+  -webkit-text-size-adjust: 150%;
 }
+
 a {
   color: white;
 }
