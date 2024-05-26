@@ -1,8 +1,8 @@
 
 @font-face {
     font-family: "flexi";
-    src: url("WebPlus_IBM_VGA_8x16.woff") format("woff"),
-    	 url("Flexi_IBM_VGA_False.ttf") format("truetype");
+    src: url("/WebPlus_IBM_VGA_8x16.woff") format("woff"),
+    	 url("/Flexi_IBM_VGA_False.ttf") format("truetype");
 }
 
 body { 
