@@ -1,20 +1,21 @@
 
 @font-face {
-    font-family: "flexi";
-    src: url("/WebPlus_IBM_VGA_8x16.woff") format("woff"),
-    	 url("/Flexi_IBM_VGA_False.ttf") format("truetype");
+    font-family: "vga";
+    src: url("WebPlus_IBM_VGA_8x16.woff") format("woff"),
+         url("Flexi_IBM_VGA_False.ttf") format("truetype");
 }
 
 body { 
     background-color: #000;	
-    font-family: "flexi", monospace;
+    font-family: "vga", monospace;
     color: #cdd6f4; 
     font-size: 16px; 
     line-height: 1.14; 
     margin: auto; 
     width: fit-content }
 
-  pre { font-family: "flexi", monospace; }
+  pre { font-family: "vga", monospace; }
+ mono { font-family: monospace, monospace; }
     a { color: #89b4fa; text-decoration: none; }
    
 
