@@ -14,6 +14,7 @@ body {
     margin: auto; 
     width: fit-content }
 
+  pre { font-family: "flexi", monospace; }
     a { color: #89b4fa; text-decoration: none; }
    
 
@@ -25,3 +26,4 @@ body {
    pl { color: #cba6f7;}  /* purple */
 
    /* figlet fonts: modular, future */
+
