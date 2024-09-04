@@ -1,0 +1,126 @@
+
+<html>                             
+<head>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<pre>
+
+<h1>Building a Gemini Client: Requests</h1>
+
+BACKGROUND
+
+The end goal is two parts; a client, and a client library that can be 
+repurposed for other projects. Both of which are going to be written in Rust, 
+partly because it's a great choice of language, and partly because I want to 
+practise writing more in Rust.
+
+Typically, I don't like to introduce a lot of dependencies into my projects, 
+but since we're working with TLS, it's much safer to use a library like rustls
+instead of rolling our own solution.
+
+gemini protocol
+────────────────────────────────────────────────────────────
+  The gemini protocol is fairly simple compared to http. [1]
+    * It is hosted by default on port 1965.
+    * URIs look like gemini://HOSTNAME/PATH
+    * Get requests are as simple as <URI><CR><LF>
+    * There are only a few response statuses
+────────────────────────────────────────────────────────────
+
+[1] <a href="https://geminiprotocol.net/docs/tech-overview.gmi">https://geminiprotocol.net/docs/tech-overview.gmi</a>
+
+rustls
+────────────────────────────────────────────────────────────────────────
+  Setting up a simple request is simple, especially using the documented
+  examples as reference. [2]
+────────────────────────────────────────────────────────────────────────
+
+[2] <a href="https://github.com/rustls/rustls/blob/main/examples/src/bin/simpleclient.rs">simpleclient.rs</a>
+
+However, adapting this from https to gemini introduces one potentially 
+unexpected problem and that is the gemini protocol's usage of TOFU (Trust on 
+First Usage) certificate management. This means that we can't just use an 
+existing certificate authority, but rather have to write a system to deal with 
+our certificates, or nonideally ignore them altogether.
+
+───────────────────────────────────────────────────────────────────────────────
+  thread 'main' panicked at src/main.rs:29:6:
+  called `Result::unwrap()` on an `Err` value: Custom { kind: InvalidData, 
+  error: InvalidCertificate(UnknownIssuer) }
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+───────────────────────────────────────────────────────────────────────────────
+
+To start testing in the most simple way possible, I will be disabling TLS 
+verification and implementing TOFU later. We can do this by updating our 
+main.rs.
+
+We can tell rustls to use our own custom certificate verifier, in which we'll 
+reimplement all of the necessary functions to always return Ok();, later we 
+can use this to implement TOFU.
+
+main.rs
+────────────────────────────────────────────────────────────
+
+  #[derive(Debug)]
+  struct DummyVerifier { }
+
+  impl DummyVerifier {
+      fn new() -> Self {
+          DummyVerifier { }
+      }
+  }
+
+  impl ServerCertVerifier for DummyVerifier {
+      fn verify_server_cert(
+          &self,
+          _: &CertificateDer<'_>,
+          _: &[CertificateDer],
+          _: &rustls::pki_types::ServerName<'_>,
+          _: &[u8],
+          _: UnixTime,
+      ) -> Result<ServerCertVerified, Error> {
+          return Ok(ServerCertVerified::assertion()); 
+      }
+  
+      fn verify_tls12_signature(
+          &self,
+          _message: &[u8],
+          _cert: &CertificateDer<'_>,
+          _dss: &DigitallySignedStruct,
+      ) -> Result<HandshakeSignatureValid, Error> {
+          return Ok(HandshakeSignatureValid::assertion());
+      }
+
+      fn verify_tls13_signature(
+          &self,
+          _message: &[u8],
+          _cert: &CertificateDer<'_>,
+          _dss: &DigitallySignedStruct,
+      ) -> Result<HandshakeSignatureValid, Error> {
+          return Ok(HandshakeSignatureValid::assertion());
+      }
+
+      fn supported_verify_schemes(
+          &self
+      ) -> Vec<SignatureScheme> {
+          vec![...]
+      }
+  }
+
+
+  fn main() {
+      let mut cfg = rustls::ClientConfig::builder()
+          .with_root_certificates(root_store)
+          .with_no_client_auth();
+      let mut config = DangerousClientConfig {cfg: &mut cfg};
+      let dummy_verifier = Arc::new(DummyVerifier::new());
+      config.set_certificate_verifier(dummy_verifier);
+  }
+────────────────────────────────────────────────────────────
+
+Now we can make requests using the gemini protocol. Next up is handling 
+statuses.
+</pre>
+</body>
+</html>
