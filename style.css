@@ -1,8 +1,8 @@
 
 @font-face {
     font-family: "vga";
-    src: url("WebPlus_IBM_VGA_8x16.woff") format("woff"),
-         url("Flexi_IBM_VGA_False.ttf") format("truetype");
+    src: url("media/WebPlus_IBM_VGA_8x16.woff") format("woff"),
+         url("media/Flexi_IBM_VGA_False.ttf") format("truetype");
 }
 
 body { 
@@ -28,3 +28,15 @@ body {
 
    /* figlet fonts: modular, future */
 
+.photo {
+	width: 90%;
+	vertical-align: middle;
+	padding: 6px;
+}
+
+@media screen and (max-width: 1000px) {
+	.column {
+		flex:100%;
+		max-width 100%;
+	}
+}
