@@ -29,14 +29,10 @@ body {
    /* figlet fonts: modular, future */
 
 .photo {
-	width: 90%;
-	vertical-align: middle;
-	padding: 6px;
-}
+    width: 90%;
+    vertical-align: middle;
+    padding: 6px; }
 
-@media screen and (max-width: 1000px) {
-	.column {
-		flex:100%;
-		max-width 100%;
-	}
-}
+@media screen and (max-width: 1000px) { .column {
+    flex:100%;
+    max-width 100%; }}
