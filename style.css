@@ -9,7 +9,7 @@ body {
     background-color: #000;	
     font-family: "vga", monospace;
     color: #cdd6f4; 
-    font-size: 16px; 
+    font-size: 18px; 
     line-height: 1.14; 
     margin: auto; 
     width: fit-content }
@@ -29,10 +29,11 @@ body {
    /* figlet fonts: modular, future */
 
 .photo {
-    width: 90%;
+    /*max-width:1000px;*/
+    width: 80%;
     vertical-align: middle;
     padding: 6px; }
 
 @media screen and (max-width: 1000px) { .column {
-    flex:100%;
-    max-width 100%; }}
+    flex: 100%;
+    max-width: 70%; }}
