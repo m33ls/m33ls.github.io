@@ -36,4 +36,4 @@ body {
 
 @media screen and (max-width: 1000px) { .column {
     flex: 100%;
-    max-width: 70%; }}
+    max-width: 100%; }}
